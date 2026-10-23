@@ -1,0 +1,10 @@
+tests:
+  sqnano.tiny:
+    tags:
+      - database
+    platform_allow:
+      - qemu_x86
+      - frdm_k64f
+    integration_platforms:
+      - qemu_x86
+    harness: ztest

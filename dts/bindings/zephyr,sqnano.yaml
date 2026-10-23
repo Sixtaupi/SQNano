@@ -1,0 +1,116 @@
+# Copyright (c) 2026 Romain Pelletant
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  SQNano database.
+
+  The storage selects the default commit strategy: a flash partition is
+  managed with shadow paging, an EEPROM API device (FRAM, MRAM, EEPROM) with
+  in-place updates protected by an undo journal. Use mode = "shadow" on a
+  real EEPROM: in-place updates rewrite the same pages at every commit.
+
+    appdb: sqnano {
+        compatible = "zephyr,sqnano";
+        path = "app.db";
+        storage = <&storage_partition>;
+    };
+
+compatible: "zephyr,sqnano"
+
+properties:
+  path:
+    type: string
+    required: true
+    description: |
+      Name used by sqlite3_open(). A path matches when it is identical or when
+      its last component is identical ("/data/app.db" opens "app.db").
+
+  storage:
+    type: phandle
+    description: |
+      Flash partition or EEPROM API device holding the database. Required
+      unless fs-dir is set.
+
+  journal:
+    type: phandle
+    description: |
+      FRAM or MRAM (EEPROM API device) in front of the flash partition
+      given by storage: hybrid mode. Page writes and erases go to the
+      FRAM first, and a page reaches the flash only when the FRAM is full,
+      so the superblocks, the tree roots and pages that the next commits
+      free never wear the flash. The FRAM content is part of the database:
+      never use the device for something else.
+
+  nand:
+    type: boolean
+    description: |
+      The storage partition is on a NAND flash (a spi-nand or flexspi
+      NAND driver). Pages are written in order within each block through
+      a translation layer that also replaces bad blocks; a logical page is
+      the NAND page less a 16-byte tag (24 with nand-soft-ecc on 2 KiB
+      pages). Leave page-size unset.
+
+  nand-soft-ecc:
+    type: boolean
+    description: |
+      Software ECC (1 bit corrected per 512 bytes) for NAND chips without
+      on-die ECC.
+
+  nand-reserved-blocks:
+    type: int
+    description: |
+      NAND blocks kept to replace blocks that go bad, on top of the blocks
+      of units without data. Default: 2 % of the partition plus 2.
+
+  fs-dir:
+    type: string
+    description: |
+      Directory of a mounted power-safe file system (LittleFS) holding the
+      database as chunk files, instead of storage. The file system must be
+      mounted before the database is opened.
+
+  fs-size:
+    type: int
+    description: Size of the database on the file system, in bytes (fs-dir).
+
+  fs-chunk:
+    type: int
+    default: 4096
+    description: |
+      Size of each chunk file (fs-dir), a multiple of the page size; use
+      the file system block size. One chunk is cached in RAM.
+
+  page-size:
+    type: int
+    description: |
+      Page size in bytes. Defaults to the flash erase size (at least 256,
+      at most CONFIG_SQNANO_MAX_PAGE_SIZE), or 256 bytes on EEPROM/FRAM. On
+      flash it must divide the erase size or be a multiple of it.
+
+  journal-slots:
+    type: int
+    description: |
+      Number of undo journal slots (EEPROM/FRAM only), each one page plus 16
+      bytes. Default 16. When the journal is full the transaction continues
+      with copy-on-write.
+
+  mode:
+    type: string
+    enum:
+      - "auto"
+      - "shadow"
+      - "journal"
+    description: |
+      Commit strategy. "auto" (default) selects shadow paging on flash and
+      the undo journal elsewhere. "shadow" on an EEPROM API device spreads
+      the writes over the whole device (copy-on-write), which an EEPROM
+      needs for its endurance; FRAM and MRAM do best with "journal".
+
+  superblock-units:
+    type: int
+    description: |
+      Size of the superblock ring, 2 to 16 erase units on flash or pages
+      otherwise; it is used when the database is created. Every commit
+      writes one record into it. Default: about 1/16 of a flash partition
+      (at most 8 units), 1/32 of the device in shadow mode without erase,
+      2 in journal mode.

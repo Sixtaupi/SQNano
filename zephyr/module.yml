@@ -1,0 +1,7 @@
+name: sqnano
+build:
+  cmake: zephyr
+  kconfig: zephyr/Kconfig
+  settings:
+    dts_root: .
+west-commands: scripts/west-commands.yml

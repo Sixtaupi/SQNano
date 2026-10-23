@@ -1,0 +1,43 @@
+/*
+ * Copyright (c) 2026 Romain Pelletant
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* A LittleFS mounted on the flash simulator, and a database in a directory of it. */
+
+&flash_sim0 {
+	partitions {
+		lfs_partition: partition@41000 {
+			compatible = "zephyr,mapped-partition";
+			label = "lfs";
+			reg = <0x00041000 0x00040000>;
+		};
+	};
+};
+
+/ {
+	fstab {
+		compatible = "zephyr,fstab";
+
+		lfs: lfs {
+			compatible = "zephyr,fstab,littlefs";
+			mount-point = "/lfs";
+			partition = <&lfs_partition>;
+			automount;
+			read-size = <16>;
+			prog-size = <16>;
+			cache-size = <256>;
+			lookahead-size = <32>;
+			block-cycles = <512>;
+		};
+	};
+
+	lfsdb: sqnano-lfs {
+		compatible = "zephyr,sqnano";
+		path = "app.db";
+		fs-dir = "/lfs/app.db";
+		fs-size = <DT_SIZE_K(96)>;
+		fs-chunk = <1024>;
+		page-size = <512>;
+	};
+};

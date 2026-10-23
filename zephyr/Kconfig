@@ -1,0 +1,408 @@
+# Copyright (c) 2026 Romain Pelletant
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig SQNANO
+	bool "SQNano embedded SQL database"
+	select REQUIRES_FLOAT_PRINTF
+	help
+	  SQL database for Zephyr with the SQLite API. Queries are compiled to C
+	  on the host by sqnanoc (zephyr_sqnano_queries() in CMake); there is no
+	  SQL interpreter on the target. Commits are atomic on power loss, on
+	  flash (shadow paging) and on FRAM/EEPROM (undo journal).
+
+if SQNANO
+
+choice SQNANO_PROFILE
+	prompt "Resource profile"
+	default SQNANO_PROFILE_STANDARD
+	help
+	  Sets the defaults of every limit below. Each limit can still be
+	  changed individually.
+
+config SQNANO_PROFILE_TINY
+	bool "tiny: Cortex-M0+/M23, precompiled single-table queries"
+	help
+	  Small pages and pools, no sqlite3.h facade and no shell by default.
+
+config SQNANO_PROFILE_STANDARD
+	bool "standard: Cortex-M4/M33"
+
+config SQNANO_PROFILE_FULL
+	bool "full: Cortex-M7, ESP32, nRF54"
+
+endchoice
+
+menu "Storage"
+
+config SQNANO_MEDIA_FLASH
+	bool "Flash partition media (shadow paging)"
+	default y
+	depends on FLASH_MAP
+	help
+	  Databases whose devicetree storage is a flash partition.
+
+config SQNANO_MEDIA_EEPROM
+	bool "EEPROM API media: FRAM, MRAM, EEPROM (undo journal)"
+	default y
+	depends on EEPROM
+
+config SQNANO_MEDIA_HYBRID
+	bool "Hybrid media: flash partition behind a FRAM"
+	default y
+	depends on SQNANO_MEDIA_FLASH && SQNANO_MEDIA_EEPROM
+	help
+	  Databases with both storage (a flash partition) and journal (an
+	  EEPROM API FRAM or MRAM). Recent page versions and erases live in
+	  the FRAM; the flash only receives pages that outlive it. With 32 KB
+	  of FRAM, a one-row-per-commit log erases the flash about 20 times
+	  less often.
+
+config SQNANO_HYBRID_MAX_SLOTS
+	int "FRAM page slots"
+	default 64
+	depends on SQNANO_MEDIA_HYBRID
+	help
+	  At most this many pages are kept in the FRAM (fewer if it is
+	  smaller). Costs 8 bytes of RAM each.
+
+config SQNANO_HYBRID_MAX_ERASES
+	int "Erase records"
+	default 64
+	depends on SQNANO_MEDIA_HYBRID
+	help
+	  Flash erases kept in the FRAM until the unit is reused; set it to
+	  the number of erase units of the partition. Costs 8 bytes of RAM
+	  and 16 bytes of FRAM each.
+
+config SQNANO_MEDIA_NAND
+	bool "NAND media: a partition of a NAND flash"
+	default y if DT_HAS_JEDEC_SPI_NAND_ENABLED || FLASH_MCUX_FLEXSPI_NAND
+	depends on SQNANO_MEDIA_FLASH
+	help
+	  Databases whose devicetree node has the nand property. A
+	  translation layer writes the pages of each block in order, tags
+	  them, replaces bad blocks (through the flash extended operations
+	  when enabled) and refreshes blocks with corrected bit flips.
+
+config SQNANO_NAND_MAX_BLOCKS
+	int "Blocks of a NAND partition"
+	default 256
+	depends on SQNANO_MEDIA_NAND
+	help
+	  Costs 8 bytes of RAM per block.
+
+config SQNANO_NAND_MAX_SLOTS
+	int "Logical pages of a NAND partition"
+	default 4096
+	depends on SQNANO_MEDIA_NAND
+	help
+	  Units beyond this many pages only serve as spare blocks. Costs 1 byte
+	  of RAM each.
+
+config SQNANO_NAND_MAX_PAGE
+	int "NAND page size"
+	default 4096
+	depends on SQNANO_MEDIA_NAND
+	help
+	  Largest NAND page; each NAND database has a buffer of this size.
+
+config SQNANO_MEDIA_FS
+	bool "File system media: a directory of a mounted LittleFS"
+	default y
+	depends on FILE_SYSTEM
+	help
+	  Databases whose devicetree node has fs-dir: the database is a set
+	  of chunk files, each updated atomically by LittleFS, with one chunk
+	  cached in RAM. Do not use it on FAT: its updates are not atomic.
+
+config SQNANO_FS_PATH_MAX
+	int "Longest file system path of a database chunk"
+	default 48
+	depends on SQNANO_MEDIA_FS
+
+config SQNANO_MAX_PAGE_SIZE
+	int "Maximum page size"
+	default 256 if SQNANO_PROFILE_TINY
+	default 1024 if SQNANO_PROFILE_STANDARD
+	default 4096
+	range 128 32768
+	help
+	  Largest page size of any database; the page cache holds
+	  CONFIG_SQNANO_PAGE_CACHE_COUNT pages of this size. On flash, pages
+	  smaller than the erase unit share it: the unit is erased once all its
+	  pages are free, and compaction moves live pages out of mostly free
+	  units. Larger pages mean fewer compactions, smaller ones less RAM.
+
+config SQNANO_MAX_PAGES
+	int "Maximum number of pages per database"
+	default 256 if SQNANO_PROFILE_TINY
+	default 1024 if SQNANO_PROFILE_STANDARD
+	default 8192
+	help
+	  Size of the page allocation bitmaps (6 bits of RAM per page). A larger
+	  medium only uses this many pages.
+
+config SQNANO_PAGE_CACHE_COUNT
+	int "Page cache frames per database"
+	default 6 if SQNANO_PROFILE_TINY
+	default 8 if SQNANO_PROFILE_STANDARD
+	default 16
+	range 6 1024
+
+config SQNANO_JOURNAL_MAX_SLOTS
+	int "Maximum undo journal slots (FRAM/EEPROM)"
+	default 8 if SQNANO_PROFILE_TINY
+	default 16 if SQNANO_PROFILE_STANDARD
+	default 32
+
+endmenu
+
+menu "Engine limits"
+
+config SQNANO_MAX_READERS
+	int "Concurrent read snapshots per database"
+	default 1 if SQNANO_PROFILE_TINY
+	default 4 if SQNANO_PROFILE_STANDARD
+	default 8
+
+config SQNANO_MAX_DEPTH
+	int "Maximum B+tree depth"
+	default 12
+	range 4 32
+
+config SQNANO_MAX_KEY_SIZE
+	int "Maximum key size"
+	default 64 if SQNANO_PROFILE_TINY
+	default 128
+	range 16 255
+	help
+	  Bounds index keys and sort keys. Larger keys return SQLITE_TOOBIG.
+
+config SQNANO_MAX_RECORD_SIZE
+	int "Maximum row size"
+	default 128 if SQNANO_PROFILE_TINY
+	default 512 if SQNANO_PROFILE_STANDARD
+	default 2048
+	help
+	  Rows that do not fit in a third of a page continue on overflow
+	  pages. Sizes the row buffers of the engine and of each scan.
+
+config SQNANO_MAX_COLUMNS
+	int "Maximum columns per table"
+	default 16 if SQNANO_PROFILE_TINY
+	default 32 if SQNANO_PROFILE_STANDARD
+	default 64
+
+config SQNANO_SCRATCH_SIZE
+	int "Per-statement scratch area for computed text"
+	default 128 if SQNANO_PROFILE_TINY
+	default 256 if SQNANO_PROFILE_STANDARD
+	default 512
+
+config SQNANO_SORT_RAM_SIZE
+	int "Sort buffer size"
+	default 256 if SQNANO_PROFILE_TINY
+	default 4096 if SQNANO_PROFILE_STANDARD
+	default 16384
+	range 64 65535
+	help
+	  RAM used by ORDER BY without a suitable index, GROUP BY and
+	  DISTINCT. A larger sort spills to the database's free pages
+	  (CONFIG_SQNANO_SORT_EXTERNAL), or else returns SQLITE_FULL.
+
+config SQNANO_SORT_EXTERNAL
+	bool "External sort"
+	default y if !SQNANO_PROFILE_TINY
+	help
+	  Sorts that do not fit in CONFIG_SQNANO_SORT_RAM_SIZE write sorted
+	  runs to free pages of the database and merge them. The pages are
+	  never part of a committed state: a power cut just frees them. The
+	  merge reads one page per run at a time, so the sort buffer should
+	  hold at least three pages plus three of the largest rows sorted.
+
+config SQNANO_SORT_MAX_RUNS
+	int "Runs per external sort"
+	depends on SQNANO_SORT_EXTERNAL
+	default 16
+	range 2 64
+	help
+	  Runs kept before they are merged together. Each costs 8 bytes of
+	  RAM per sort buffer.
+
+config SQNANO_SORT_BUFFERS
+	int "Sort buffers"
+	default 1 if SQNANO_PROFILE_TINY
+	default 2 if SQNANO_PROFILE_STANDARD
+	default 4
+	help
+	  GROUP BY with ORDER BY uses two buffers.
+
+config SQNANO_AGG_TEXT_SIZE
+	int "Largest text value kept by min()/max()"
+	default 32 if SQNANO_PROFILE_TINY
+	default 64
+
+config SQNANO_YIELD_ROWS
+	int "Rows scanned before yielding the database lock"
+	default 32
+
+config SQNANO_MAX_SAVEPOINTS
+	int "Nested savepoints per write transaction"
+	default 0 if SQNANO_PROFILE_TINY
+	default 8
+	range 0 15
+	help
+	  SAVEPOINT / RELEASE / ROLLBACK TO, and statement-level rollback
+	  inside an explicit transaction (each write statement uses one
+	  savepoint). Costs one byte of RAM per page (CONFIG_SQNANO_MAX_PAGES).
+	  With 0, a statement that fails half-way inside an explicit
+	  transaction makes its COMMIT fail instead.
+
+config SQNANO_FOREIGN_KEYS
+	bool "Foreign key enforcement"
+	default y if !SQNANO_PROFILE_TINY
+	help
+	  FOREIGN KEY constraints with ON DELETE / ON UPDATE actions and
+	  deferred constraints, active once PRAGMA foreign_keys = ON (or
+	  sqnano_db_foreign_keys()) is set, as in SQLite.
+
+config SQNANO_FK_MAX_DEPTH
+	int "Nesting of foreign key actions"
+	depends on SQNANO_FOREIGN_KEYS
+	default 3 if SQNANO_PROFILE_STANDARD
+	default 6
+	help
+	  A cascade that goes deeper fails. Each level uses about
+	  2 * CONFIG_SQNANO_MAX_RECORD_SIZE + 32 * CONFIG_SQNANO_MAX_COLUMNS
+	  bytes of stack.
+
+config SQNANO_MIGRATE_FROM_MIN
+	int "Oldest schema version this firmware can migrate from"
+	default 1
+	help
+	  sqnanoc embeds the migrations from this version up to the current
+	  one. Databases older than that cannot be opened.
+
+endmenu
+
+config SQNANO_SQLITE_COMPAT
+	bool "sqlite3.h source-compatible facade"
+	default y if !SQNANO_PROFILE_TINY
+
+if SQNANO_SQLITE_COMPAT
+
+config SQNANO_MAX_DATABASES
+	int "Databases registered for sqlite3_open()"
+	default 4
+
+config SQNANO_MAX_CONNECTIONS
+	int "Connections (sqlite3 handles)"
+	default 2 if SQNANO_PROFILE_STANDARD
+	default 4
+
+config SQNANO_MAX_STMTS
+	int "Prepared statements"
+	default 4 if SQNANO_PROFILE_STANDARD
+	default 16
+	help
+	  sqlite3_stmt handles alive at once. Their states come from the
+	  statement pool (CONFIG_SQNANO_STMT_POOL_SIZE).
+
+config SQNANO_PARAM_BUF_SIZE
+	int "Bound text/blob storage per statement"
+	default 128 if SQNANO_PROFILE_STANDARD
+	default 512
+
+endif
+
+if !SQNANO_SQLITE_COMPAT
+config SQNANO_MAX_DATABASES
+	int
+	default 1
+config SQNANO_MAX_CONNECTIONS
+	int
+	default 1
+config SQNANO_MAX_STMTS
+	int
+	default 1
+config SQNANO_PARAM_BUF_SIZE
+	int
+	default 16
+endif
+
+config SQNANO_SHELL
+	bool "Shell command \"db\""
+	default y if SHELL && !SQNANO_PROFILE_TINY
+	depends on SHELL
+	help
+	  Restricted SQL on the target, dot commands (.tables, .schema,
+	  .stats, .run ...), table/csv/json/line output.
+
+if SQNANO_SHELL
+
+config SQNANO_SHELL_WRITE
+	bool "Allow writes from the shell"
+	help
+	  Lets ".run" execute precompiled INSERT/UPDATE/DELETE after
+	  ".readonly off". Protect the shell with its authentication.
+
+config SQNANO_SHELL_LINE_SIZE
+	int "Longest shell command"
+	default 256
+
+endif
+
+config SQNANO_REMOTE
+	bool "Remote cursor server for sqnano-cli (SMP group)"
+	default y if SQNANO_PROFILE_FULL
+	depends on MCUMGR
+	help
+	  An mcumgr group that answers sqnano-cli: databases and schema,
+	  rows of a table by rowid range, precompiled queries, on read
+	  snapshots. The host runs the full SQL of SQLite on what it reads.
+	  Requests are stateless and bounded by the SMP buffer.
+
+if SQNANO_REMOTE
+
+config SQNANO_REMOTE_GROUP
+	int "SMP group ID"
+	default 64
+	help
+	  64 is the first user-defined group (MGMT_GROUP_ID_PERUSER);
+	  sqnano-cli uses it unless told otherwise.
+
+config SQNANO_REMOTE_WRITE
+	bool "Allow precompiled queries that write"
+	help
+	  Lets sqnano-cli ".run" INSERT/UPDATE/DELETE queries. Protect the
+	  SMP transport (for example with Bluetooth pairing) first.
+
+config SQNANO_REMOTE_BUF_SIZE
+	int "Largest response"
+	default 1024
+	help
+	  Responses are also bounded by the SMP buffer of the transport
+	  (CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE): raise both for faster
+	  transfers.
+
+
+endif
+
+config SQNANO_STMT_POOL_SIZE
+	int "Statement pool size in bytes (0: one slot per statement)"
+	default 0
+	help
+	  States of the prepared statements, of the shell ".run" and of the
+	  remote server's queries. 0 reserves one slot of the largest state
+	  for each of them (CONFIG_SQNANO_MAX_STMTS, plus one for the shell
+	  and one for the remote server), which can never run out. A size
+	  in bytes makes a first-fit arena where each statement takes the
+	  size of its own state: run the application, read the peak shown
+	  by the shell ".stats" (or sqnano_pool_stats()) and set a bit more.
+	  Statements that do not fit fail with SQLITE_NOMEM.
+
+module = SQNANO
+module-str = sqnano
+source "subsys/logging/Kconfig.template.log_config"
+
+endif

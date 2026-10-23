@@ -1,0 +1,10 @@
+/*
+ * Copyright (c) 2026 Romain Pelletant
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* The EEPROM database with copy-on-write pages and a 4-page superblock ring. */
+&framdb {
+	mode = "shadow";
+	superblock-units = <4>;
+};

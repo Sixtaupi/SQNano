@@ -1,0 +1,6 @@
+west-commands:
+  - file: scripts/west_commands/sqnano.py
+    commands:
+      - name: sqnano
+        class: Sqnano
+        help: SQNano tools (porting report, SQL compiler)

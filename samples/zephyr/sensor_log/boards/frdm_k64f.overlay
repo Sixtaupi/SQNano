@@ -1,0 +1,12 @@
+/*
+ * Copyright (c) 2026 Romain Pelletant
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	appdb: sqnano {
+		compatible = "zephyr,sqnano";
+		path = "app.db";
+		storage = <&storage_partition>;
+	};
+};

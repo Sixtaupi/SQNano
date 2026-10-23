@@ -1,0 +1,12 @@
+tests:
+  sqnano.remote:
+    tags:
+      - database
+      - mcumgr
+    platform_allow:
+      - qemu_x86
+    integration_platforms:
+      - qemu_x86
+    harness: ztest
+    modules:
+      - zcbor

@@ -1,0 +1,34 @@
+tests:
+  sqnano.engine:
+    tags:
+      - database
+      - sql
+    platform_allow:
+      - qemu_x86
+    integration_platforms:
+      - qemu_x86
+    harness: ztest
+  sqnano.engine.small_pages:
+    tags:
+      - database
+      - sql
+    platform_allow:
+      - qemu_x86
+    integration_platforms:
+      - qemu_x86
+    harness: ztest
+    extra_configs:
+      # 256-byte pages in the 1 KiB sectors of the flash simulator.
+      - CONFIG_SQNANO_MAX_PAGE_SIZE=256
+      - CONFIG_SQNANO_MAX_PAGES=1024
+  sqnano.engine.eeprom_shadow:
+    tags:
+      - database
+      - sql
+    platform_allow:
+      - qemu_x86
+    integration_platforms:
+      - qemu_x86
+    harness: ztest
+    extra_args:
+      - EXTRA_DTC_OVERLAY_FILE=eeprom_shadow.overlay

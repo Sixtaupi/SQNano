@@ -1,0 +1,106 @@
+# Copyright (c) 2026 Romain Pelletant
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fuzzing: the libFuzzer targets of tests/fuzz (corrupted database images,
+# remote server requests, SQL given to sqlite3.h, key and record
+# encodings), and the differential test against SQLite with fresh seeds.
+# Short runs on
+# every push, long ones every night; the corpus grows from run to run.
+
+name: Fuzz
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per fuzz target
+        default: "1800"
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  libfuzzer:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_mount, fuzz_remote, fuzz_sql, fuzz_keys]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DSQNANO_LIBFUZZER=ON
+          cmake --build build -j4 --target ${{ matrix.target }}
+      - name: Corpus from earlier runs
+        uses: actions/cache/restore@v4
+        with:
+          path: corpus
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-${{ matrix.target }}-
+      - name: Fuzz
+        run: |
+          case "${{ github.event_name }}" in
+            schedule) secs=1800 ;;
+            workflow_dispatch) secs="${{ inputs.seconds }}" ;;
+            *) secs=180 ;;
+          esac
+          mkdir -p corpus artifacts
+          cp -n tests/fuzz/corpus/${{ matrix.target }}/* corpus/ || true
+          ./build/tests/fuzz/${{ matrix.target }} corpus \
+            -max_total_time=$secs -timeout=10 -rss_limit_mb=2048 -print_final_stats=1 \
+            -artifact_prefix=artifacts/
+      - name: Keep the corpus
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: corpus
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+      - name: Crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: crash-${{ matrix.target }}
+          path: artifacts/
+
+  randomized:
+    name: random seeds
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build (ASan + UBSan)
+        run: |
+          cmake -S . -B build -DCMAKE_C_COMPILER=clang -DSQNANO_SANITIZE=ON
+          cmake --build build -j4 --target diff_runner diff_runner_smallsort
+      - name: Differential test against SQLite
+        run: |
+          rounds=6000
+          [ "${{ github.event_name }}" = schedule ] && rounds=40000
+          base=$(( ${{ github.run_id }} % 1000000 ))
+          for i in 0 1 2 3; do
+            for media in nor fram; do
+              seed=$(( base * 10 + i ))
+              echo "seed $seed, $media (rerun: difftest.py RUNNER --seed $seed --media $media)"
+              python3 tests/host/difftest.py build/tests/host/diff_runner \
+                --seed $seed --rounds $rounds --media $media --tolerate-sort-full
+            done
+            python3 tests/host/difftest.py build/tests/host/diff_runner_smallsort \
+              --seed $(( base * 10 + i )) --rounds $rounds --media nor --tolerate-sort-full
+          done

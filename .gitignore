@@ -1,0 +1,9 @@
+build/
+twister-out*/
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+crash-*
+leak-*
+timeout-*

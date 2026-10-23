@@ -1,0 +1,23 @@
+sample:
+  name: SQNano sensor log
+  description: Log sensor readings with the SQLite API on a flash partition
+common:
+  tags:
+    - database
+    - sql
+  integration_platforms:
+    - qemu_x86
+tests:
+  sample.sqnano.sensor_log:
+    platform_allow:
+      - qemu_x86
+    harness: console
+    harness_config:
+      type: multi_line
+      ordered: true
+      regex:
+        - "sensor 3: last readings"
+        - "ts=1760782.* value=.*"
+        - "sensor 0: .* readings, min .* max .*"
+        - "purged .* rows"
+        - "sensor_log done"

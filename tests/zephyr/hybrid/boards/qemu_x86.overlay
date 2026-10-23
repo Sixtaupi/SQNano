@@ -1,0 +1,30 @@
+/*
+ * Copyright (c) 2026 Romain Pelletant
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* A flash partition behind the EEPROM simulator used as a FRAM. */
+
+&flash_sim0 {
+	partitions {
+		sqnano_partition: partition@41000 {
+			compatible = "zephyr,mapped-partition";
+			label = "sqnano";
+			reg = <0x00041000 0x00040000>;
+		};
+	};
+};
+
+&eeprom0 {
+	size = <DT_SIZE_K(32)>;
+};
+
+/ {
+	hybriddb: sqnano-hybrid {
+		compatible = "zephyr,sqnano";
+		path = "app.db";
+		storage = <&sqnano_partition>;
+		journal = <&eeprom0>;
+		page-size = <512>;
+	};
+};
